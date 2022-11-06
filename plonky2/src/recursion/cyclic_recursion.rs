@@ -23,9 +23,9 @@ pub struct CyclicRecursionData<
     C: GenericConfig<D, F = F>,
     const D: usize,
 > {
-    proof: &'a Option<ProofWithPublicInputs<F, C, D>>,
-    verifier_data: &'a VerifierOnlyCircuitData<C, D>,
-    common_data: &'a CommonCircuitData<F, D>,
+    pub proof: &'a Option<ProofWithPublicInputs<F, C, D>>,
+    pub verifier_data: &'a VerifierOnlyCircuitData<C, D>,
+    pub common_data: &'a CommonCircuitData<F, D>,
 }
 
 pub struct CyclicRecursionTarget<const D: usize> {
