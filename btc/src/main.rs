@@ -1,3 +1,4 @@
+#![feature(generic_const_exprs)]
 use std::ops::AddAssign;
 use std::ops::MulAssign;
 
@@ -28,7 +29,7 @@ const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
 
 // const FACTORS: [usize; 6] = [12, 12, 9, 9, 9, 7];
-const FACTORS: [usize; 2] = [2, 2];
+const FACTORS: [usize; 3] = [2, 2, 2];
 
 fn to_bits(msg: Vec<u8>) -> Vec<bool> {
     let mut res = Vec::new();
@@ -128,7 +129,6 @@ fn run_l1_circuit(
     data: &CircuitData<F, C, D>,
     targets: &MultiHeaderTarget,
     headers: [&str; 2],
-    expected_hashes: [&str; 2],
 ) -> Result<ProofWithPublicInputs<F, C, D>> {
     let num_headers = FACTORS[0];
     let mut total_work = BigUint::new(vec![0]);
@@ -154,10 +154,55 @@ fn run_l1_circuit(
     }
 
     let proof = data.prove(pw).unwrap();
-    data.verify(proof.clone())?;
+    // data.verify(proof.clone())?;
 
     Ok(proof)
 }
+use plonky2::plonk::config::AlgebraicHasher;
+use plonky2::plonk::config::Hasher;
+
+fn recursive_proof<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>,
+    InnerC: GenericConfig<D, F = F>,
+    const D: usize,
+>(
+    inner1: &ProofTuple<F, InnerC, D>,
+) -> Result<ProofTuple<F, C, D>>
+where
+    InnerC::Hasher: AlgebraicHasher<F>,
+    [(); C::Hasher::HASH_SIZE]:,
+{
+    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut pw = PartialWitness::new();
+
+    {
+        let (inner_proof, inner_vd, inner_cd) = inner1;
+        let pt = builder.add_virtual_proof_with_pis::<InnerC>(inner_cd);
+        pw.set_proof_with_pis_target(&pt, inner_proof);
+
+        let inner_data = VerifierCircuitTarget {
+            circuit_digest: builder.add_virtual_hash(),
+            constants_sigmas_cap: builder.add_virtual_cap(inner_cd.config.fri_config.cap_height),
+        };
+        pw.set_verifier_data_target(&inner_data, inner_vd);
+        // pw.set_cap_target(
+        //     &inner_data.constants_sigmas_cap,
+        //     &inner_vd.constants_sigmas_cap,
+        // );
+        // pw.set_hash_target(inner_data.circuit_digest, inner_vd.circuit_digest);
+
+        builder.verify_proof::<InnerC>(pt, &inner_data, inner_cd);
+    }
+
+    let data = builder.build::<C>();
+    let proof = data.prove(pw)?;
+
+    data.verify(proof.clone())?;
+
+    Ok((proof, data.verifier_only, data.common))
+}
+
 
 fn compile_and_run_ln_circuit(
     layer_idx: usize,
@@ -202,12 +247,7 @@ fn compile_and_run_ln_circuit(
             constants_sigmas_cap: builder.add_virtual_cap(inner_cd.config.fri_config.cap_height),
         };
         pw.set_proof_with_pis_target(&pt, &inner_proofs[i]);
-        pw.set_cap_target(
-            &inner_data.constants_sigmas_cap,
-            &inner_vd.constants_sigmas_cap,
-        );
-        pw.set_hash_target(inner_data.circuit_digest, inner_vd.circuit_digest);
-
+        pw.set_verifier_data_target(&inner_data, inner_vd);
 
         let current_work = builder.add_virtual_biguint_target(8);
         for i in 0..8 {
@@ -255,6 +295,10 @@ fn compile_and_run_ln_circuit(
 }
 
 fn main() -> Result<()> {
+    const D: usize = 2;
+    type C = PoseidonGoldilocksConfig;
+    type F = <C as GenericConfig<D>>::F;
+
     let headers = [
         "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c",
         "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299",
@@ -288,18 +332,11 @@ fn main() -> Result<()> {
     // let proof = run_l1_circuit(data, targets, headers, expected_hashes)?;
     // let elapsed = now.elapsed().as_millis();
     // println!("proof generationt took {}ms", elapsed);
-
     // println!("public inputs {:?}", proof.0.public_inputs);
-
 
     let headers_1 = [
         "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c",
         "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299", 
-    ];
-
-    let expected_hashes_1 = [
-        "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000",
-        "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
     ];
 
     let headers_2 = [
@@ -307,15 +344,36 @@ fn main() -> Result<()> {
         "010000004860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000d5fdcc541e25de1c7a5addedf24858b8bb665c9f36ef744ee42c316022c90f9bb0bc6649ffff001d08d2bd61",
     ];
 
-    let expected_hashes_2 = [
-        "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
-        "bddd99ccfda39da1b108ce1a5d70038d0a967bacb68b6b63065f626a00000000", 
+    let headers_3 = [
+        "010000004860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000d5fdcc541e25de1c7a5addedf24858b8bb665c9f36ef744ee42c316022c90f9bb0bc6649ffff001d08d2bd61",
+        "01000000bddd99ccfda39da1b108ce1a5d70038d0a967bacb68b6b63065f626a0000000044f672226090d85db9a9f2fbfe5f0f9609b387af7be5b7fbb7a1767c831c9e995dbe6649ffff001d05e0ed6d",
     ];
 
-    let proof1 = run_l1_circuit(&data, &targets, headers_1, expected_hashes_1)?;
-    let proof2 = run_l1_circuit(&data, &targets, headers_2, expected_hashes_2)?;
-    println!("got here");
-    let proof3 = compile_and_run_ln_circuit(1, vec![proof1, proof2], &data.verifier_only, &data.common)?;
+    let headers_4 = [
+        "01000000bddd99ccfda39da1b108ce1a5d70038d0a967bacb68b6b63065f626a0000000044f672226090d85db9a9f2fbfe5f0f9609b387af7be5b7fbb7a1767c831c9e995dbe6649ffff001d05e0ed6d",
+        "010000004944469562ae1c2c74d9a535e00b6f3e40ffbad4f2fda3895501b582000000007a06ea98cd40ba2e3288262b28638cec5337c1456aaf5eedc8e9e5a20f062bdf8cc16649ffff001d2bfee0a9",
+    ];
+
+    let proof1 = run_l1_circuit(&data, &targets, headers_1)?;
+    println!("stage 0, batch 1");
+
+    let proof2 = run_l1_circuit(&data, &targets, headers_2)?;
+    println!("stage 0, batch 2");
+
+    let proof3 = run_l1_circuit(&data, &targets, headers_3)?;
+    println!("stage 0, batch 3");
+
+    let proof4 = run_l1_circuit(&data, &targets, headers_4)?;
+    println!("stage 0, batch 4");
+
+    let proof_merge_1 = compile_and_run_ln_circuit(1, vec![proof1, proof2], &data.verifier_only, &data.common)?;
+    println!("stage 1, batch 0");
+
+    let proof_merge_2 = compile_and_run_ln_circuit(1, vec![proof3, proof4], &data.verifier_only, &data.common)?;
+    println!("stage 1, batch 1");
+
+    let final_proof = compile_and_run_ln_circuit(2, vec![proof_merge_1.0, proof_merge_2.0], &proof_merge_1.1, &proof_merge_1.2)?;
+    println!("stage 2, batch 0");
 
     Ok(())
 }
