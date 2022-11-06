@@ -161,14 +161,10 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     println!("Done comparing sha hash to threshold");
 
     // Now we compute the work given the threshold bits
-    let mut numerator_bits = Vec::new(); // 2^256
+    let mut numerator_bits = Vec::new(); // 2^256-1
     let mut threshold_bits_copy = Vec::new();
     for i in 0..256 {
-        if i == 0 {
-            numerator_bits.push(builder.constant_bool(true));
-        } else {
-            numerator_bits.push(builder.constant_bool(false));
-        }
+        numerator_bits.push(builder.constant_bool(true));
         threshold_bits_copy.push(builder.add_virtual_bool_target_safe()); // Will verify that input is 0 or 1
         builder.connect(
             threshold_bits_input[i].target,
@@ -230,8 +226,6 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
             );
         }
 
-        println!("Header {}", h);
-
         // Then add the header's work to the total work
         if h == 0 {
             work.push(header_targets.work);
@@ -264,15 +258,25 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::AddAssign;
+    use std::ops::MulAssign;
+
     use anyhow::Result;
     use hex::decode;
+    use num::BigUint;
+    use plonky2::hash::hash_types::RichField;
     use plonky2::iop::witness::{PartialWitness, Witness};
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
+    use plonky2_ecdsa::gadgets::biguint::BigUintTarget;
+    use plonky2_ecdsa::gadgets::biguint::CircuitBuilderBiguint;
+    use plonky2_field::extension::Extendable;
+    use plonky2_u32::gadgets::arithmetic_u32::CircuitBuilderU32;
 
     use crate::btc::make_header_circuit;
     use crate::btc::make_multi_header_circuit;
+    use crate::helper::bits_to_biguint_target;
 
     fn to_bits(msg: Vec<u8>) -> Vec<bool> {
         let mut res = Vec::new();
@@ -309,6 +313,28 @@ mod tests {
         (exp, mantissa)
     }
 
+    fn compute_work(exp: u32, mantissa: u64) -> BigUint {
+        let mut my_threshold_bits = Vec::new();
+        for i in 0..256 {
+            if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+                my_threshold_bits.push(true);
+            } else {
+                my_threshold_bits.push(false);
+            }
+        }
+        let mut acc: BigUint = BigUint::new(vec![1]);
+        let mut denominator: BigUint = BigUint::new(vec![0]);
+        for i in 0..256 {
+            if my_threshold_bits[255 - i] {
+                denominator.add_assign(acc.clone());
+            }
+            acc.mul_assign(BigUint::new(vec![2]));
+        }
+        let numerator = acc;
+        let correct_work = numerator / denominator;
+        return correct_work;
+    }
+
     #[test]
     fn test_header_circuit() -> Result<()> {
         let genesis_header = decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap();
@@ -333,8 +359,6 @@ mod tests {
             }
         }
 
-        let data = builder.build::<C>();
-
         let mut pw = PartialWitness::new();
         for i in 0..header_bits.len() {
             pw.set_bool_target(targets.header_bits[i], header_bits[i]);
@@ -343,6 +367,9 @@ mod tests {
         let (exp, mantissa) = compute_exp_and_mantissa(header_bits);
 
         println!("exp: {}, mantissa: {}", exp, mantissa);
+        let mut correct_work = compute_work(exp, mantissa);
+        // When you include the below line, the circuit should fail since correct work is wrong
+        // correct_work.sub_assign(BigUint::new(vec![1]));
 
         for i in 0..256 {
             if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
@@ -353,7 +380,15 @@ mod tests {
                 print!("0");
             }
         }
+        println!("");
 
+        let mut correct_work_target = builder.constant_biguint(&correct_work);
+        for _ in 8 - correct_work_target.num_limbs()..8 {
+            correct_work_target.limbs.push(builder.zero_u32());
+        }
+        builder.connect_biguint(&targets.work, &correct_work_target);
+
+        let data = builder.build::<C>();
         let now = std::time::Instant::now();
         let proof = data.prove(pw).unwrap();
         let elapsed = now.elapsed().as_millis();
@@ -416,9 +451,7 @@ mod tests {
             }
         }
 
-        let data = builder.build::<C>();
-        println!("Built the circuit");
-
+        let mut total_work = BigUint::new(vec![0]);
         let mut pw = PartialWitness::new();
         for h in 0..num_headers {
             let header_bits = to_bits(decode(headers[h]).unwrap());
@@ -427,18 +460,27 @@ mod tests {
             }
 
             let (exp, mantissa) = compute_exp_and_mantissa(header_bits);
+            let header_work = compute_work(exp, mantissa);
+            total_work.add_assign(header_work);
 
             for i in 0..256 {
                 if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], true);
-                    print!("1");
+                    // print!("1");
                 } else {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], false);
-                    print!("0");
+                    // print!("0");
                 }
             }
         }
+        let mut total_work_target = builder.constant_biguint(&total_work);
+        for _ in 8 - total_work_target.num_limbs()..8 {
+            total_work_target.limbs.push(builder.zero_u32());
+        }
+        builder.connect_biguint(&targets.total_work, &total_work_target);
 
+        let data = builder.build::<C>();
+        println!("Built the circuit");
         let now = std::time::Instant::now();
         let proof = data.prove(pw).unwrap();
         let elapsed = now.elapsed().as_millis();
