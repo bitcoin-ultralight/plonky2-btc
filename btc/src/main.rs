@@ -7,7 +7,6 @@ use anyhow::Result;
 use btc::btc::make_multi_header_circuit;
 use hex::decode;
 use num::BigUint;
-use plonky2::hash::hash_types::RichField;
 use plonky2::iop::witness::{PartialWitness, Witness};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::CircuitConfig;
@@ -18,11 +17,14 @@ use plonky2::plonk::circuit_data::VerifierOnlyCircuitData;
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2::plonk::proof::ProofWithPublicInputsTarget;
-use plonky2_ecdsa::gadgets::biguint::BigUintTarget;
 use plonky2_ecdsa::gadgets::biguint::CircuitBuilderBiguint;
-use plonky2_field::extension::Extendable;
 use plonky2_field::goldilocks_field::GoldilocksField;
-use plonky2_u32::gadgets::arithmetic_u32::CircuitBuilderU32;
+
+type ProofTuple<F, C, const D: usize> = (
+    ProofWithPublicInputs<F, C, D>,
+    VerifierOnlyCircuitData<C, D>,
+    CommonCircuitData<F, D>,
+);
 
 type F = GoldilocksField;
 const D: usize = 2;
@@ -88,12 +90,6 @@ fn compute_work(exp: u32, mantissa: u64) -> BigUint {
     return correct_work;
 }
 
-type ProofTuple<F, C, const D: usize> = (
-    ProofWithPublicInputs<F, C, D>,
-    VerifierOnlyCircuitData<C, D>,
-    CommonCircuitData<F, D>,
-);
-
 fn compile_l1_circuit() -> Result<(CircuitData<F, C, D>, MultiHeaderTarget)> {
     let num_headers = FACTORS[0];
     let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
@@ -158,51 +154,6 @@ fn run_l1_circuit(
 
     Ok(proof)
 }
-use plonky2::plonk::config::AlgebraicHasher;
-use plonky2::plonk::config::Hasher;
-
-fn recursive_proof<
-    F: RichField + Extendable<D>,
-    C: GenericConfig<D, F = F>,
-    InnerC: GenericConfig<D, F = F>,
-    const D: usize,
->(
-    inner1: &ProofTuple<F, InnerC, D>,
-) -> Result<ProofTuple<F, C, D>>
-where
-    InnerC::Hasher: AlgebraicHasher<F>,
-    [(); C::Hasher::HASH_SIZE]:,
-{
-    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-    let mut pw = PartialWitness::new();
-
-    {
-        let (inner_proof, inner_vd, inner_cd) = inner1;
-        let pt = builder.add_virtual_proof_with_pis::<InnerC>(inner_cd);
-        pw.set_proof_with_pis_target(&pt, inner_proof);
-
-        let inner_data = VerifierCircuitTarget {
-            circuit_digest: builder.add_virtual_hash(),
-            constants_sigmas_cap: builder.add_virtual_cap(inner_cd.config.fri_config.cap_height),
-        };
-        pw.set_verifier_data_target(&inner_data, inner_vd);
-        // pw.set_cap_target(
-        //     &inner_data.constants_sigmas_cap,
-        //     &inner_vd.constants_sigmas_cap,
-        // );
-        // pw.set_hash_target(inner_data.circuit_digest, inner_vd.circuit_digest);
-
-        builder.verify_proof::<InnerC>(pt, &inner_data, inner_cd);
-    }
-
-    let data = builder.build::<C>();
-    let proof = data.prove(pw)?;
-
-    data.verify(proof.clone())?;
-
-    Ok((proof, data.verifier_only, data.common))
-}
-
 
 fn compile_and_run_ln_circuit(
     layer_idx: usize,
