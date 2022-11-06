@@ -27,7 +27,8 @@ type F = GoldilocksField;
 const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
 
-const FACTORS: [usize; 6] = [12, 12, 9, 9, 9, 7];
+// const FACTORS: [usize; 6] = [12, 12, 9, 9, 9, 7];
+const FACTORS: [usize; 2] = [2, 2];
 
 fn to_bits(msg: Vec<u8>) -> Vec<bool> {
     let mut res = Vec::new();
@@ -93,7 +94,7 @@ type ProofTuple<F, C, const D: usize> = (
 );
 
 fn compile_l1_circuit() -> Result<(CircuitData<F, C, D>, MultiHeaderTarget)> {
-    let num_headers = 10;
+    let num_headers = FACTORS[0];
     let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
     let targets = make_multi_header_circuit(&mut builder, num_headers);
 
@@ -124,11 +125,11 @@ fn compile_l1_circuit() -> Result<(CircuitData<F, C, D>, MultiHeaderTarget)> {
 }
 
 fn run_l1_circuit(
-    data: CircuitData<F, C, D>,
-    targets: MultiHeaderTarget,
-    headers: [&str; 10],
-    expected_hashes: [&str; 10],
-) -> Result<ProofTuple<F, C, D>> {
+    data: &CircuitData<F, C, D>,
+    targets: &MultiHeaderTarget,
+    headers: [&str; 2],
+    expected_hashes: [&str; 2],
+) -> Result<ProofWithPublicInputs<F, C, D>> {
     let num_headers = FACTORS[0];
     let mut total_work = BigUint::new(vec![0]);
     let mut pw = PartialWitness::<F>::new();
@@ -153,8 +154,9 @@ fn run_l1_circuit(
     }
 
     let proof = data.prove(pw).unwrap();
+    data.verify(proof.clone())?;
 
-    Ok((proof, data.verifier_only, data.common))
+    Ok(proof)
 }
 
 fn compile_and_run_ln_circuit(
@@ -187,7 +189,11 @@ fn compile_and_run_ln_circuit(
     let mut pts = Vec::new();
     let mut inner_datas = Vec::new();
 
+    let zero = builder.zero();
     let mut work_accumulator = builder.add_virtual_biguint_target(8);
+    for i in 0..8 {
+        builder.connect(work_accumulator.limbs[i].0, zero);
+    }
 
     for i in 0..num_proofs {
         let pt: ProofWithPublicInputsTarget<D> = builder.add_virtual_proof_with_pis::<C>(inner_cd);
@@ -207,6 +213,7 @@ fn compile_and_run_ln_circuit(
         for i in 0..8 {
             builder.connect(pt.public_inputs[512+i], current_work.limbs[i].0);
         }
+
         work_accumulator = builder.add_biguint(&work_accumulator, &current_work);
 
         if i == 0 {
@@ -231,7 +238,7 @@ fn compile_and_run_ln_circuit(
         let pt1: &ProofWithPublicInputsTarget<D> = &pts[i];
         let pt2: &ProofWithPublicInputsTarget<D> = &pts[i+1];
         for i in 0..256 {
-            builder.connect(pt1.public_inputs[i], pt2.public_inputs[256+i]);
+            builder.connect(pt1.public_inputs[256+i], pt2.public_inputs[i]);
         }
     }
 
@@ -241,6 +248,8 @@ fn compile_and_run_ln_circuit(
 
     let data = builder.build::<C>();
     let proof = data.prove(pw)?;
+
+    data.verify(proof.clone())?;
 
     Ok((proof, data.verifier_only, data.common))
 }
@@ -275,11 +284,38 @@ fn main() -> Result<()> {
     let elapsed = now.elapsed().as_millis();
     println!("circuit compilation took {}ms", elapsed);
 
-    let now = std::time::Instant::now();
-    let proof = run_l1_circuit(data, targets, headers, expected_hashes)?;
-    let elapsed = now.elapsed().as_millis();
-    println!("proof generationt took {}ms", elapsed);
+    // let now = std::time::Instant::now();
+    // let proof = run_l1_circuit(data, targets, headers, expected_hashes)?;
+    // let elapsed = now.elapsed().as_millis();
+    // println!("proof generationt took {}ms", elapsed);
 
-    println!("public inputs {:?}", proof.0.public_inputs);
+    // println!("public inputs {:?}", proof.0.public_inputs);
+
+
+    let headers_1 = [
+        "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c",
+        "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299", 
+    ];
+
+    let expected_hashes_1 = [
+        "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000",
+        "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
+    ];
+
+    let headers_2 = [
+        "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299",
+        "010000004860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000d5fdcc541e25de1c7a5addedf24858b8bb665c9f36ef744ee42c316022c90f9bb0bc6649ffff001d08d2bd61",
+    ];
+
+    let expected_hashes_2 = [
+        "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
+        "bddd99ccfda39da1b108ce1a5d70038d0a967bacb68b6b63065f626a00000000", 
+    ];
+
+    let proof1 = run_l1_circuit(&data, &targets, headers_1, expected_hashes_1)?;
+    let proof2 = run_l1_circuit(&data, &targets, headers_2, expected_hashes_2)?;
+    println!("got here");
+    let proof3 = compile_and_run_ln_circuit(1, vec![proof1, proof2], &data.verifier_only, &data.common)?;
+
     Ok(())
 }

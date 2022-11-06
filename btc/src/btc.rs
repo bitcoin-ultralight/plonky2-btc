@@ -227,6 +227,8 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         }
     }
 
+    // [A, B, C, D]
+    // [A, B] <-> [B, C] <-> [C, D]
     let total_work = builder.add_virtual_biguint_target(work[work.len() - 2].num_limbs());
     builder.connect_biguint(&work[work.len() - 2], &total_work);
 
