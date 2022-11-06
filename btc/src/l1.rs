@@ -123,7 +123,7 @@ pub fn compile_l1_circuit(num_headers: usize) -> Result<(CircuitData<F, C, D>, M
 pub fn run_l1_circuit(
     data: &CircuitData<F, C, D>,
     targets: &MultiHeaderTarget,
-    headers: [&str; 2],
+    headers: &[&str],
     num_headers: usize,
 ) -> Result<ProofWithPublicInputs<F, C, D>> {
     let mut total_work = BigUint::new(vec![0]);

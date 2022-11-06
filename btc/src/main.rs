@@ -61,16 +61,16 @@ fn main() -> anyhow::Result<()> {
         "010000004944469562ae1c2c74d9a535e00b6f3e40ffbad4f2fda3895501b582000000007a06ea98cd40ba2e3288262b28638cec5337c1456aaf5eedc8e9e5a20f062bdf8cc16649ffff001d2bfee0a9",
     ];
 
-    let proof1 = run_l1_circuit(&data, &targets, headers_1, 2)?;
+    let proof1 = run_l1_circuit(&data, &targets, headers_1.as_slice(), 2)?;
     println!("stage 0, batch 1");
 
-    let proof2 = run_l1_circuit(&data, &targets, headers_2, 2)?;
+    let proof2 = run_l1_circuit(&data, &targets, headers_2.as_slice(), 2)?;
     println!("stage 0, batch 2");
 
-    let proof3 = run_l1_circuit(&data, &targets, headers_3, 2)?;
+    let proof3 = run_l1_circuit(&data, &targets, headers_3.as_slice(), 2)?;
     println!("stage 0, batch 3");
 
-    let proof4 = run_l1_circuit(&data, &targets, headers_4, 22)?;
+    let proof4 = run_l1_circuit(&data, &targets, headers_4.as_slice(), 2)?;
     println!("stage 0, batch 4");
 
     let proof_merge_1 = compile_and_run_ln_circuit(1, vec![proof1, proof2], &data.verifier_only, &data.common, 2)?;
