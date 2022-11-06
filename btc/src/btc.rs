@@ -7,6 +7,7 @@ use plonky2_ecdsa::gadgets::biguint::{BigUintTarget, CircuitBuilderBiguint};
 use plonky2_field::extension::Extendable;
 use plonky2_u32::gadgets::arithmetic_u32::U32Target;
 use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
+use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 
 use crate::helper::{bits_to_biguint_target, byte_to_u32_target};
 use crate::sha256::make_sha256_circuit;
@@ -22,7 +23,6 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
 ) -> HeaderTarget {
     let mut header_bits = Vec::new();
     for _ in 0..80 * 8 {
-        // 80 bytes in a header
         header_bits.push(builder.add_virtual_bool_target_safe()); // Will verify that input is 0 or 1
     }
 
@@ -47,11 +47,6 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         builder.connect(sha2_targets.digest[i].target, return_hash[i].target);
     }
 
-    println!("Double Sha finished");
-
-    // TODO should be in a different circuit
-    // Deal with the difficulty
-    // Extract difficulty bits from the 80 bytes
     let mut threshold_bits_input = Vec::new();
     let mut threshold_bits = Vec::new();
     for i in 0..256 {
@@ -60,10 +55,9 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         builder.connect(threshold_bits_input[i].target, threshold_bits[i].target);
     }
 
-    let mut difficulty_exp_bits = header_bits[600..608].to_vec();
-    let mut difficulty_exp_int = byte_to_u32_target(builder, difficulty_exp_bits);
+    let difficulty_exp_bits = header_bits[600..608].to_vec();
+    let difficulty_exp_int = byte_to_u32_target(builder, difficulty_exp_bits);
 
-    // Check if threshold array is all 0 OR in the range of mantissa
     for j in 0..32 {
         let byte_from_bits =
             byte_to_u32_target(builder, threshold_bits[j * 8..(j + 1) * 8].to_vec()).0;
@@ -97,10 +91,7 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         builder.connect(mistake_exists.target, _false.target);
     }
 
-    println!("Checked that all bits are in mantissa range or equals zero");
-
-    // Check that mantissa range matches mantissa from 80-byte header
-    // However, it's annoying because mantissa from the header is in little-endian by BYTES
+    // println!("Checked that all bits are in mantissa range or equals zero");
 
     let mut threshold_bytes = Vec::new();
     for j in 0..32 {
@@ -137,18 +128,15 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     check_bytes(33, 584);
     check_bytes(34, 576);
 
-    println!("Bytes comparison done");
-
     let mut sha2_bytes = Vec::new();
     for j in 0..32 {
-        sha2_bytes.push(builder.add_virtual_target()); // Will verify that input is 0 or 1
+        sha2_bytes.push(builder.add_virtual_target());
 
         let byte_from_bits =
             byte_to_u32_target(builder, sha1_targets.digest[j * 8..(j + 1) * 8].to_vec()).0;
         builder.connect(sha2_bytes[j], byte_from_bits);
     }
 
-    // Compare difficulty_bits with output of double SHA 256
     let is_less = list_le_u32_circuit(
         builder,
         threshold_bytes.into_iter().map(|x| U32Target(x)).collect(),
@@ -158,10 +146,9 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     let one = builder._true();
     builder.connect(is_less.target, one.target);
 
-    println!("Done comparing sha hash to threshold");
+    // println!("Done comparing sha hash to threshold");
 
-    // Now we compute the work given the threshold bits
-    let mut numerator_bits = Vec::new(); // 2^256-1
+    let mut numerator_bits = Vec::new();
     let mut threshold_bits_copy = Vec::new();
     for i in 0..256 {
         numerator_bits.push(builder.constant_bool(true));
@@ -196,21 +183,18 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
 ) -> MultiHeaderTarget {
     let mut multi_header_bits = Vec::new();
     for _ in 0..num_headers * 80 * 8 {
-        // 80 bytes in a header, each byte is 8 bits
-        multi_header_bits.push(builder.add_virtual_bool_target_safe()); // Will verify that input is 0 or 1
+        multi_header_bits.push(builder.add_virtual_bool_target_safe());
     }
 
     let mut multi_threshold_bits = Vec::new();
     for _ in 0..num_headers * 256 {
-        // 256 bits in a header
-        multi_threshold_bits.push(builder.add_virtual_bool_target_safe()); // Will verify that input is 0 or 1
+        multi_threshold_bits.push(builder.add_virtual_bool_target_safe());
     }
 
     let mut hashes = Vec::new();
     let mut work = Vec::new();
 
     for h in 0..num_headers {
-        // First make the header work verification circuit and pass in the relevant header
         let header_targets = make_header_circuit(builder);
         for i in 0..80 * 8 {
             builder.connect(
@@ -226,7 +210,6 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
             );
         }
 
-        // Then add the header's work to the total work
         if h == 0 {
             work.push(header_targets.work);
         } else {
@@ -236,7 +219,6 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         hashes.push(header_targets.hash);
 
         if h > 0 {
-            // Make sure that the header connects to the previous header's hash
             let claimed_prev_header =
                 &multi_header_bits[(h * 80 * 8) + 4 * 8..(h * 80 * 8) + 36 * 8];
             for i in 0..256 {
@@ -245,8 +227,8 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         }
     }
 
-    let total_work = builder.add_virtual_biguint_target(work[work.len() - 1].num_limbs());
-    builder.connect_biguint(&work[work.len() - 1], &total_work);
+    let total_work = builder.add_virtual_biguint_target(work[work.len() - 2].num_limbs());
+    builder.connect_biguint(&work[work.len() - 2], &total_work);
 
     return MultiHeaderTarget {
         headers: multi_header_bits,
@@ -255,6 +237,8 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
         hashes: hashes,
     };
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -398,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_multi_header_circuit() -> Result<()> {
-        let num_headers = 4;
+        let num_headers = 10;
         let headers = [
             "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c",
             "010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299",
@@ -430,29 +414,36 @@ mod tests {
         let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
         let targets = make_multi_header_circuit(&mut builder, num_headers);
 
-        {
-            let hash_bits = to_bits(decode(expected_hashes[0]).unwrap());
-            for i in 0..256 {
-                if hash_bits[i] {
-                    builder.assert_one(targets.hashes[0][i].target);
-                } else {
-                    builder.assert_zero(targets.hashes[0][i].target);
-                }
-            }
+        let mut public_start_hash = Vec::new();
+        for i in 0..256 {
+            public_start_hash.push(builder.add_virtual_bool_target_unsafe());
+            builder.register_public_input(public_start_hash[i].target);
+            builder.connect(public_start_hash[i].target, targets.hashes[0][i].target);
         }
-        {
-            let hash_bits = to_bits(decode(expected_hashes[num_headers - 1]).unwrap());
-            for i in 0..256 {
-                if hash_bits[i] {
-                    builder.assert_one(targets.hashes[num_headers - 1][i].target);
-                } else {
-                    builder.assert_zero(targets.hashes[num_headers - 1][i].target);
-                }
-            }
+
+        let mut public_end_hash = Vec::new();
+        for i in 0..256 {
+            public_end_hash.push(builder.add_virtual_bool_target_unsafe());
+            builder.register_public_input(public_end_hash[i].target);
+            builder.connect(
+                public_end_hash[i].target,
+                targets.hashes[num_headers - 1][i].target,
+            );
         }
+
+        let public_total_work = builder.add_virtual_biguint_target(8);
+        for i in 0..8 {
+            builder.register_public_input(public_total_work.limbs[i].0);
+            builder.connect(public_total_work.limbs[i].0, targets.total_work.limbs[i].0);
+        }
+
+        let data = builder.build::<C>();
+
+        // post compile
 
         let mut total_work = BigUint::new(vec![0]);
         let mut pw = PartialWitness::new();
+
         for h in 0..num_headers {
             let header_bits = to_bits(decode(headers[h]).unwrap());
             for i in 0..80 * 8 {
@@ -466,63 +457,21 @@ mod tests {
             for i in 0..256 {
                 if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], true);
-                    // print!("1");
                 } else {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], false);
-                    // print!("0");
                 }
             }
         }
-        let mut total_work_target = builder.constant_biguint(&total_work);
-        for _ in 8 - total_work_target.num_limbs()..8 {
-            total_work_target.limbs.push(builder.zero_u32());
-        }
-        builder.connect_biguint(&targets.total_work, &total_work_target);
 
-        let data = builder.build::<C>();
         println!("Built the circuit");
         let now = std::time::Instant::now();
         let proof = data.prove(pw).unwrap();
         let elapsed = now.elapsed().as_millis();
         println!("Proved the circuit in {} ms", elapsed);
 
-        data.verify(proof)
-    }
+        data.verify(proof)?;
 
-    #[test]
-    #[should_panic]
-    fn test_header_failure() {
-        let mut header = String::new();
-        for _ in 0..8 {
-            header.push_str("abcdefghij");
-        }
-        let header_bits = to_bits(header.as_bytes().to_vec());
-        let expected_hash = "d68d62c262c2ec08961c1104188cde86f51695878759666ad61490c8ec66745c";
-        let hash_bits = to_bits(decode(expected_hash).unwrap());
-
-        const D: usize = 2;
-        type C = PoseidonGoldilocksConfig;
-        type F = <C as GenericConfig<D>>::F;
-        let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-        let targets = make_header_circuit(&mut builder);
-
-        for i in 0..hash_bits.len() {
-            if hash_bits[i] {
-                builder.assert_one(targets.hash[i].target);
-            } else {
-                builder.assert_zero(targets.hash[i].target);
-            }
-        }
-
-        let data = builder.build::<C>();
-        let mut pw = PartialWitness::new();
-
-        for i in 0..header_bits.len() {
-            pw.set_bool_target(targets.header_bits[i], header_bits[i]);
-        }
-        let now = std::time::Instant::now();
-        let proof = data.prove(pw).unwrap();
-        data.verify(proof).expect("header failure");
+        Ok(())
     }
 }
 
