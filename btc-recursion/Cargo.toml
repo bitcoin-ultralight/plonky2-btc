@@ -21,6 +21,7 @@ plonky2_ecdsa = { path = "../ecdsa" }
 plonky2_field = { path = "../field" }
 plonky2_util = { path = "../util" }
 plonky2_u32 = { path = "../u32"  }
+btc = { path = "../btc"  }
 anyhow = "1.0.65"
 hex = "0.4.3"
 hex-literal = "0.3.4"

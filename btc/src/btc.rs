@@ -9,15 +9,70 @@ use plonky2_u32::gadgets::arithmetic_u32::U32Target;
 use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
 use plonky2_u32::gates::comparison::ComparisonGate;
 
-use crate::helper::byte_to_u32_target;
 use crate::bit_operations::{add_arr, and_arr, not_arr, xor2_arr, xor3_arr, zip_add};
+use crate::helper::byte_to_u32_target;
 use crate::helper::{_right_rotate, _shr, uint32_to_bits};
 use crate::sha256::make_sha256_circuit;
 pub struct HeaderTarget {
-    header_bits: Vec<BoolTarget>,
-    threshold_bits: Vec<BoolTarget>,
-    hash: Vec<BoolTarget>,
-    work: Target,
+    pub header_bits: Vec<BoolTarget>,
+    pub threshold_bits: Vec<BoolTarget>,
+    pub hash: Vec<BoolTarget>,
+    pub work: Target,
+}
+
+pub fn create_header_bits(builder: CircuitBuilder<F, D>, public: bool) -> Vec<BoolTarget> {
+    let out = Vec::new();
+    for i in 0..80 * 8 {
+        out.push(builder.add_virtual_bool_target_unsafe());
+        if public {
+            builder.register_public_input(out[i])
+        }
+    }
+    return out;
+}
+
+pub fn create_hash_bits(builder: CircuitBuilder<F, D>, public: bool) -> Vec<BoolTarget> {
+    let out = Vec::new();
+    for i in 0..256 {
+        out.push(builder.add_virtual_bool_target_unsafe());
+        if public {
+            builder.register_public_input(out[i])
+        }
+    }
+    return out;
+}
+
+pub struct StepTargets {
+    pub input_parent_hash: Vec<BoolTarget>,
+    pub input_parent_total_work: Vec<BoolTarget>,
+    pub input_header_bits: Vec<BoolTarget>,
+    pub input_threshold_bits: Vec<BoolTarget>,
+    pub output_hash: Vec<BoolTarget>,
+    pub output_total_work: Vec<BoolTarget>,
+}
+
+pub fn make_step_circuit<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+) -> StepTargets {
+    let mut input_parent_hash = create_hash_bits(builder, false);
+    let mut input_parent_total_work = builder.add_virtual_target();
+    let mut input_header_bits = create_header_bits(builder, false);
+    let mut input_threshold_bits = create_header_bits(builder, false);
+
+    let sha1_targets = make_sha256_circuit(builder, input_header_bits.len() as u128);
+    for i in 0..input_header_bits.len() {
+        builder.connect(input_header_bits[i].target, sha1_targets.input[i].target);
+    }
+
+    let sha2_targets = make_sha256_circuit(builder, input_header_bits.len() as u128);
+    for i in 0..sha1_targets.digest.len() {
+        builder.connect(sha1_targets.digest[i].target, sha2_targets.input[i].target);
+    }
+
+    let mut output_hash = create_hash_bits(builder, true);
+    for i in 0..sha2_targets.digest.len() {
+        builder.connect(sha2_targets.digest[i].target, output_hash[i].target);
+    }
 }
 
 pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
@@ -169,10 +224,10 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     builder.connect(is_less.target, one.target);
 
     return HeaderTarget {
-        header_bits: header_bits,
-        threshold_bits: threshold_bits_input,
-        hash: return_hash,
-        work: builder.constant(F::ONE), // TODO
+        header_bits: header_bits,             // input
+        threshold_bits: threshold_bits_input, // input
+        hash: return_hash,                    // output
+        work: builder.constant(F::ONE),       // o
     };
 }
 

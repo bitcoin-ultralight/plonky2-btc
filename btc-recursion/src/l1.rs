@@ -1,6 +1,8 @@
-use crate::recursion;
 use anyhow::Result;
+use btc::btc::make_header_circuit;
+use btc::btc::make_multi_header_circuit;
 use plonky2::field::goldilocks_field::GoldilocksField;
+use plonky2::iop::target::BoolTarget;
 use plonky2::iop::witness::PartialWitness;
 use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::circuit_data::{
@@ -14,6 +16,9 @@ use plonky2::recursion::cyclic_recursion::{
     CyclicRecursionTarget,
 };
 use plonky2_field::types::Field;
+use plonky2_u32::gadgets::arithmetic_u32::CircuitBuilderU32;
+
+use crate::recursion;
 
 type F = GoldilocksField;
 type C = PoseidonGoldilocksConfig;
@@ -30,17 +35,90 @@ pub struct L1Circuit {
     recursion_target: CyclicRecursionTarget<D>,
 }
 
+pub fn create_header_bits(builder: CircuitBuilder<F, D>, public: bool) -> Vec<BoolTarget> {
+    let out = Vec::new();
+    for i in 0..80 * 8 {
+        out.push(builder.add_virtual_bool_target_unsafe());
+        if public {
+            builder.register_public_input(out[i])
+        }
+    }
+    return out;
+}
+
+pub fn create_hash_bits(builder: CircuitBuilder<F, D>, public: bool) -> Vec<BoolTarget> {
+    let out = Vec::new();
+    for i in 0..256 {
+        out.push(builder.add_virtual_bool_target_unsafe());
+        if public {
+            builder.register_public_input(out[i])
+        }
+    }
+    return out;
+}
+
 impl L1Circuit {
     pub fn build() -> Result<L1Circuit> {
         let config = CircuitConfig::standard_recursion_config();
         let mut builder = CircuitBuilder::<F, D>::new(config.clone());
 
-        let x_base = builder.add_virtual_target();
-        builder.register_public_input(x_base);
+        // base case
+        let base_parent_hash = create_hash_bits(builder, true);
+        let mut base_parent_total_work = builder.add_virtual_public_input();
+
+        // inputs constrained by cyclic recursion
+        let mut parent_hash = create_header_bits(builder, false);
+        let parent_total_work = builder.add_virtual_target();
+
+        // inputs from right now
+        let mut input_parent_hash = create_hash_bits(builder, false);
+        let mut input_parent_total_work = builder.add_virtual_target();
+        let mut input_header_bits = create_header_bits(builder, false);
+        let mut input_threshold_bits = create_header_bits(builder, false);
+
+        // outputs
+        let mut output_parent_hash = create_header_bits(builder, false);
+        let output_total_work = builder.add_virtual_target();
+
+        // public inputs from last proof
+        let old_pis = [
+            base_parent_hash.into_iter().map(|x| x.target).collect(),
+            vec![base_total_work],
+            parent_hash.into_iter().map(|x| x.target).collect(),
+            vec![total_work],
+        ]
+        .concat();
+        let mut common_data = recursion::common_data_for_recursion::<F, C, D>();
+        let base_case = builder.add_virtual_bool_target_safe();
+        let cyclic_data_target = builder
+            .cyclic_recursion::<C>(base_case, &old_pis, &mut common_data)
+            .unwrap();
+
+        let mut input_parent_hash_bis = Vec::new();
+        for i in 0..256 {
+            input_parent_hash_bis.push(builder.add_virtual_bool_target_unsafe());
+            input_parent_hash_bis[i] = BoolTarget::new_unsafe(builder.select(
+                cyclic_data_target.base_case,
+                base_parent_hash[i].target,
+                parent_hash[i].target,
+            ));
+            builder.connect(input_parent_hash[i].target, input_parent_hash_bis[i].target);
+        }
+
+        let input_total_work_bis =
+            builder.select(cyclic_data_target.base_case, base_total_work, total_work);
+        builder.connect(input_total_work, input_total_work_bis);
+
+        for i in 0..256 {
+            builder.connect(targets.header_bits[i])
+        }
+
+        /* old code */
 
         // state transition
         let input_x = builder.add_virtual_target(); // either x or x_base
         let x = builder.add_virtual_target(); // constrained by cyclic_recursion
+
         let y = builder.add_const(input_x, GoldilocksField(7));
         builder.register_public_input(y);
 
