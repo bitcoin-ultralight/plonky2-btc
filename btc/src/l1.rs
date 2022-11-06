@@ -74,7 +74,7 @@ fn compute_exp_and_mantissa(header_bits: Vec<bool>) -> (u32, u64) {
 fn compute_work(exp: u32, mantissa: u64) -> BigUint {
     let mut my_threshold_bits = Vec::new();
     for i in 0..256 {
-        if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+        if i < 256 - exp && mantissa as u128 & (1u128 << (255u128 - exp as u128 - i as u128)) != 0 {
             my_threshold_bits.push(true);
         } else {
             my_threshold_bits.push(false);
@@ -143,7 +143,9 @@ pub fn run_l1_circuit(
         total_work.add_assign(header_work);
 
         for i in 0..256 {
-            if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+            if i < 256 - exp
+                && mantissa as u128 & (1u128 << (255u128 - exp as u128 - i as u128)) != 0
+            {
                 pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], true);
             } else {
                 pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], false);
