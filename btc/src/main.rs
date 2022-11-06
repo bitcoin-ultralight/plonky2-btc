@@ -1,5 +1,5 @@
-use btc::l1::{compile_l1_circuit, run_l1_circuit, compile_and_run_ln_circuit};
-use plonky2::plonk::config::{PoseidonGoldilocksConfig, GenericConfig};
+use btc::l1::{compile_and_run_ln_circuit, compile_l1_circuit, run_l1_circuit};
+use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 
 fn main() -> anyhow::Result<()> {
     const D: usize = 2;
@@ -73,13 +73,34 @@ fn main() -> anyhow::Result<()> {
     let proof4 = run_l1_circuit(&data, &targets, headers_4.as_slice(), 2)?;
     println!("stage 0, batch 4");
 
-    let proof_merge_1 = compile_and_run_ln_circuit(1, vec![proof1, proof2], &data.verifier_only, &data.common, 2)?;
+    let proof_merge_1 = compile_and_run_ln_circuit(
+        1,
+        vec![proof1, proof2],
+        &data.verifier_only,
+        &data.common,
+        2,
+        false,
+    )?;
     println!("stage 1, batch 0");
 
-    let proof_merge_2 = compile_and_run_ln_circuit(1, vec![proof3, proof4], &data.verifier_only, &data.common, 2)?;
+    let proof_merge_2 = compile_and_run_ln_circuit(
+        1,
+        vec![proof3, proof4],
+        &data.verifier_only,
+        &data.common,
+        2,
+        false,
+    )?;
     println!("stage 1, batch 1");
 
-    let final_proof = compile_and_run_ln_circuit(2, vec![proof_merge_1.0, proof_merge_2.0], &proof_merge_1.1, &proof_merge_1.2, 2)?;
+    let final_proof = compile_and_run_ln_circuit(
+        2,
+        vec![proof_merge_1.0.unwrap(), proof_merge_2.0.unwrap()],
+        &proof_merge_1.1,
+        &proof_merge_1.2,
+        2,
+        false,
+    )?;
     println!("stage 2, batch 0");
 
     Ok(())

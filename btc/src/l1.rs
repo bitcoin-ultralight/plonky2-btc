@@ -2,11 +2,10 @@
 use std::ops::AddAssign;
 use std::ops::MulAssign;
 
-use crate::btc::MultiHeaderTarget;
 use anyhow::Result;
-use crate::btc::make_multi_header_circuit;
 use hex::decode;
 use num::BigUint;
+use plonky2::hash::hash_types::RichField;
 use plonky2::iop::witness::{PartialWitness, Witness};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::CircuitConfig;
@@ -18,7 +17,11 @@ use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2::plonk::proof::ProofWithPublicInputsTarget;
 use plonky2_ecdsa::gadgets::biguint::CircuitBuilderBiguint;
+use plonky2_field::extension::Extendable;
 use plonky2_field::goldilocks_field::GoldilocksField;
+
+use crate::btc::make_multi_header_circuit;
+use crate::btc::MultiHeaderTarget;
 
 type ProofTuple<F, C, const D: usize> = (
     ProofWithPublicInputs<F, C, D>,
@@ -160,7 +163,12 @@ pub fn compile_and_run_ln_circuit(
     inner_vd: &VerifierOnlyCircuitData<C, D>,
     inner_cd: &CommonCircuitData<F, D>,
     num_proofs: usize,
-) -> Result<ProofTuple<F, C, D>> {
+    only_compile: bool,
+) -> Result<(
+    Option<ProofWithPublicInputs<F, C, D>>,
+    VerifierOnlyCircuitData<C, D>,
+    CommonCircuitData<F, D>,
+)> {
     let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
     let mut pw = PartialWitness::<F>::new();
 
@@ -196,12 +204,15 @@ pub fn compile_and_run_ln_circuit(
             circuit_digest: builder.add_virtual_hash(),
             constants_sigmas_cap: builder.add_virtual_cap(inner_cd.config.fri_config.cap_height),
         };
-        pw.set_proof_with_pis_target(&pt, &inner_proofs[i]);
-        pw.set_verifier_data_target(&inner_data, inner_vd);
+        if !only_compile {
+            // We only set the witness if are not only compiling
+            pw.set_proof_with_pis_target(&pt, &inner_proofs[i]);
+            pw.set_verifier_data_target(&inner_data, inner_vd);
+        }
 
         let current_work = builder.add_virtual_biguint_target(8);
         for i in 0..8 {
-            builder.connect(pt.public_inputs[512+i], current_work.limbs[i].0);
+            builder.connect(pt.public_inputs[512 + i], current_work.limbs[i].0);
         }
 
         work_accumulator = builder.add_biguint(&work_accumulator, &current_work);
@@ -213,7 +224,7 @@ pub fn compile_and_run_ln_circuit(
         }
         if i == num_proofs - 1 {
             for i in 0..256 {
-                builder.connect(public_end_hash[i].target, pt.public_inputs[256+i]);
+                builder.connect(public_end_hash[i].target, pt.public_inputs[256 + i]);
             }
             for i in 0..8 {
                 builder.connect(work_accumulator.limbs[i].0, public_total_work.limbs[i].0);
@@ -224,11 +235,11 @@ pub fn compile_and_run_ln_circuit(
         inner_datas.push(inner_data);
     }
 
-    for i in 0..(num_proofs-1) {
+    for i in 0..(num_proofs - 1) {
         let pt1: &ProofWithPublicInputsTarget<D> = &pts[i];
-        let pt2: &ProofWithPublicInputsTarget<D> = &pts[i+1];
+        let pt2: &ProofWithPublicInputsTarget<D> = &pts[i + 1];
         for i in 0..256 {
-            builder.connect(pt1.public_inputs[256+i], pt2.public_inputs[i]);
+            builder.connect(pt1.public_inputs[256 + i], pt2.public_inputs[i]);
         }
     }
 
@@ -237,9 +248,12 @@ pub fn compile_and_run_ln_circuit(
     });
 
     let data = builder.build::<C>();
-    let proof = data.prove(pw)?;
-
-    data.verify(proof.clone())?;
-
-    Ok((proof, data.verifier_only, data.common))
+    if !only_compile {
+        let proof = data.prove(pw).unwrap();
+        data.verify(proof.clone())?;
+        // data.verify(proof.clone())?;
+        Ok((Some(proof), data.verifier_only, data.common))
+    } else {
+        Ok((None, data.verifier_only, data.common))
+    }
 }
