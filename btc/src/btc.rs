@@ -11,10 +11,10 @@ use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
 use crate::helper::{bits_to_biguint_target, byte_to_u32_target};
 use crate::sha256::make_sha256_circuit;
 pub struct HeaderTarget {
-    header_bits: Vec<BoolTarget>,
-    threshold_bits: Vec<BoolTarget>,
-    hash: Vec<BoolTarget>,
-    work: BigUintTarget,
+    pub header_bits: Vec<BoolTarget>,
+    pub threshold_bits: Vec<BoolTarget>,
+    pub hash: Vec<BoolTarget>,
+    pub work: BigUintTarget,
 }
 
 pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
