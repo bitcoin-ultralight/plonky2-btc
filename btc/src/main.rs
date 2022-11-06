@@ -96,8 +96,8 @@ fn main() -> anyhow::Result<()> {
     let final_proof = compile_and_run_ln_circuit(
         2,
         vec![proof_merge_1.0.unwrap(), proof_merge_2.0.unwrap()],
-        &proof_merge_1.1,
-        &proof_merge_1.2,
+        &proof_merge_1.1.verifier_only,
+        &proof_merge_1.1.common,
         2,
         false,
     )?;

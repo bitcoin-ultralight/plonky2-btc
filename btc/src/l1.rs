@@ -164,11 +164,7 @@ pub fn compile_and_run_ln_circuit(
     inner_cd: &CommonCircuitData<F, D>,
     num_proofs: usize,
     only_compile: bool,
-) -> Result<(
-    Option<ProofWithPublicInputs<F, C, D>>,
-    VerifierOnlyCircuitData<C, D>,
-    CommonCircuitData<F, D>,
-)> {
+) -> Result<(Option<ProofWithPublicInputs<F, C, D>>, CircuitData<F, C, D>)> {
     let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
     let mut pw = PartialWitness::<F>::new();
 
@@ -252,8 +248,8 @@ pub fn compile_and_run_ln_circuit(
         let proof = data.prove(pw).unwrap();
         data.verify(proof.clone())?;
         // data.verify(proof.clone())?;
-        Ok((Some(proof), data.verifier_only, data.common))
+        Ok((Some(proof), data))
     } else {
-        Ok((None, data.verifier_only, data.common))
+        Ok((None, data))
     }
 }
