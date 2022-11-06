@@ -12,17 +12,22 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::CircuitConfig;
 use plonky2::plonk::circuit_data::CircuitData;
 use plonky2::plonk::circuit_data::CommonCircuitData;
+use plonky2::plonk::circuit_data::VerifierCircuitTarget;
 use plonky2::plonk::circuit_data::VerifierOnlyCircuitData;
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
+use plonky2::plonk::proof::ProofWithPublicInputsTarget;
 use plonky2_ecdsa::gadgets::biguint::BigUintTarget;
 use plonky2_ecdsa::gadgets::biguint::CircuitBuilderBiguint;
 use plonky2_field::extension::Extendable;
+use plonky2_field::goldilocks_field::GoldilocksField;
 use plonky2_u32::gadgets::arithmetic_u32::CircuitBuilderU32;
 
+type F = GoldilocksField;
 const D: usize = 2;
 type C = PoseidonGoldilocksConfig;
-type F = <C as GenericConfig<D>>::F;
+
+const FACTORS: [usize; 6] = [12, 12, 9, 9, 9, 7];
 
 fn to_bits(msg: Vec<u8>) -> Vec<bool> {
     let mut res = Vec::new();
@@ -81,6 +86,12 @@ fn compute_work(exp: u32, mantissa: u64) -> BigUint {
     return correct_work;
 }
 
+type ProofTuple<F, C, const D: usize> = (
+    ProofWithPublicInputs<F, C, D>,
+    VerifierOnlyCircuitData<C, D>,
+    CommonCircuitData<F, D>,
+);
+
 fn compile_l1_circuit() -> Result<(CircuitData<F, C, D>, MultiHeaderTarget)> {
     let num_headers = 10;
     let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
@@ -112,19 +123,13 @@ fn compile_l1_circuit() -> Result<(CircuitData<F, C, D>, MultiHeaderTarget)> {
     Ok((builder.build::<C>(), targets))
 }
 
-type ProofTuple<F, C, const D: usize> = (
-    ProofWithPublicInputs<F, C, D>,
-    VerifierOnlyCircuitData<C, D>,
-    CommonCircuitData<F, D>,
-);
-
 fn run_l1_circuit(
     data: CircuitData<F, C, D>,
     targets: MultiHeaderTarget,
     headers: [&str; 10],
     expected_hashes: [&str; 10],
 ) -> Result<ProofTuple<F, C, D>> {
-    let num_headers = 10;
+    let num_headers = FACTORS[0];
     let mut total_work = BigUint::new(vec![0]);
     let mut pw = PartialWitness::<F>::new();
 
@@ -148,6 +153,94 @@ fn run_l1_circuit(
     }
 
     let proof = data.prove(pw).unwrap();
+
+    Ok((proof, data.verifier_only, data.common))
+}
+
+fn compile_and_run_ln_circuit(
+    layer_idx: usize,
+    inner_proofs: Vec<ProofWithPublicInputs<F, C, 2>>,
+    inner_vd: &VerifierOnlyCircuitData<C, D>,
+    inner_cd: &CommonCircuitData<F, D>,
+) -> Result<ProofTuple<F, C, D>> {
+    let num_proofs = FACTORS[layer_idx];
+    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
+    let mut pw = PartialWitness::<F>::new();
+
+    let mut public_start_hash = Vec::new();
+    for i in 0..256 {
+        public_start_hash.push(builder.add_virtual_bool_target_unsafe());
+        builder.register_public_input(public_start_hash[i].target);
+    }
+
+    let mut public_end_hash = Vec::new();
+    for i in 0..256 {
+        public_end_hash.push(builder.add_virtual_bool_target_unsafe());
+        builder.register_public_input(public_end_hash[i].target);
+    }
+
+    let public_total_work = builder.add_virtual_biguint_target(8);
+    for i in 0..8 {
+        builder.register_public_input(public_total_work.limbs[i].0);
+    }
+
+    let mut pts = Vec::new();
+    let mut inner_datas = Vec::new();
+
+    let mut work_accumulator = builder.add_virtual_biguint_target(8);
+
+    for i in 0..num_proofs {
+        let pt: ProofWithPublicInputsTarget<D> = builder.add_virtual_proof_with_pis::<C>(inner_cd);
+        let inner_data = VerifierCircuitTarget {
+            circuit_digest: builder.add_virtual_hash(),
+            constants_sigmas_cap: builder.add_virtual_cap(inner_cd.config.fri_config.cap_height),
+        };
+        pw.set_proof_with_pis_target(&pt, &inner_proofs[i]);
+        pw.set_cap_target(
+            &inner_data.constants_sigmas_cap,
+            &inner_vd.constants_sigmas_cap,
+        );
+        pw.set_hash_target(inner_data.circuit_digest, inner_vd.circuit_digest);
+
+
+        let current_work = builder.add_virtual_biguint_target(8);
+        for i in 0..8 {
+            builder.connect(pt.public_inputs[512+i], current_work.limbs[i].0);
+        }
+        work_accumulator = builder.add_biguint(&work_accumulator, &current_work);
+
+        if i == 0 {
+            for i in 0..256 {
+                builder.connect(public_start_hash[i].target, pt.public_inputs[i]);
+            }
+        }
+        if i == num_proofs - 1 {
+            for i in 0..256 {
+                builder.connect(public_end_hash[i].target, pt.public_inputs[256+i]);
+            }
+            for i in 0..8 {
+                builder.connect(work_accumulator.limbs[i].0, public_total_work.limbs[i].0);
+            }
+        }
+
+        pts.push(pt);
+        inner_datas.push(inner_data);
+    }
+
+    for i in 0..(num_proofs-1) {
+        let pt1: &ProofWithPublicInputsTarget<D> = &pts[i];
+        let pt2: &ProofWithPublicInputsTarget<D> = &pts[i+1];
+        for i in 0..256 {
+            builder.connect(pt1.public_inputs[i], pt2.public_inputs[256+i]);
+        }
+    }
+
+    pts.into_iter().enumerate().for_each(|(i, pt)| {
+        builder.verify_proof::<C>(pt, &inner_datas[i], inner_cd);
+    });
+
+    let data = builder.build::<C>();
+    let proof = data.prove(pw)?;
 
     Ok((proof, data.verifier_only, data.common))
 }
