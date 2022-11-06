@@ -3,11 +3,11 @@ use std::marker::PhantomData;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::target::{BoolTarget, Target};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
+use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2_ecdsa::gadgets::biguint::{BigUintTarget, CircuitBuilderBiguint};
 use plonky2_field::extension::Extendable;
 use plonky2_u32::gadgets::arithmetic_u32::U32Target;
 use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
-use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 
 use crate::helper::{bits_to_biguint_target, byte_to_u32_target};
 use crate::sha256::make_sha256_circuit;
@@ -240,8 +240,6 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     };
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use std::ops::AddAssign;
@@ -302,7 +300,9 @@ mod tests {
     fn compute_work(exp: u32, mantissa: u64) -> BigUint {
         let mut my_threshold_bits = Vec::new();
         for i in 0..256 {
-            if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+            if i < 256 - exp
+                && mantissa as u128 & (1u128 << (255u128 - exp as u128 - i as u128)) != 0
+            {
                 my_threshold_bits.push(true);
             } else {
                 my_threshold_bits.push(false);
@@ -323,10 +323,13 @@ mod tests {
 
     #[test]
     fn test_header_circuit() -> Result<()> {
-        let genesis_header = decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap();
+        // let genesis_header = decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap();
+        // This is the 500k header, not genesis
+        let genesis_header = decode("000000201929eb850a74427d0440cf6b518308837566cd6d0662790000000000000000001f6231ed3de07345b607ec2a39b2d01bec2fe10dfb7f516ba4958a42691c95316d0a385a459600185599fc5c").unwrap();
         let header_bits = to_bits(genesis_header);
         // NOTE this is the reversed order of how it's displayed on block explorers
-        let expected_hash = "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000";
+        // let expected_hash = "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000";
+        let expected_hash = "045d94a1c33354c3759cc0512dcc49fd81bf4c3637fb24000000000000000000";
         let hash_bits = to_bits(decode(expected_hash).unwrap());
 
         const D: usize = 2;
@@ -358,7 +361,9 @@ mod tests {
         // correct_work.sub_assign(BigUint::new(vec![1]));
 
         for i in 0..256 {
-            if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+            if i < 256 - exp
+                && mantissa as u128 & (1u128 << (255u128 - exp as u128 - i as u128)) != 0
+            {
                 pw.set_bool_target(targets.threshold_bits[i as usize], true);
                 print!("1");
             } else {
@@ -457,7 +462,9 @@ mod tests {
             total_work.add_assign(header_work);
 
             for i in 0..256 {
-                if i < 256 - exp && mantissa & (1 << (255 - exp - i)) != 0 {
+                if i < 256 - exp
+                    && mantissa as u128 & (1u128 << (255u128 - exp as u128 - i as u128)) != 0
+                {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], true);
                 } else {
                     pw.set_bool_target(targets.multi_threshold_bits[h * 256 + i as usize], false);
