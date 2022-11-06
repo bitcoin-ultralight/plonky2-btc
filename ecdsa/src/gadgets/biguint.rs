@@ -350,7 +350,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
         let a = witness.get_biguint_target(self.a.clone());
         let b = witness.get_biguint_target(self.b.clone());
         let (div, rem) = a.div_rem(&b);
-        println!("a: {:?}, b: {:?}, div: {:?}, rem: {:?}", a, b, div, rem);
+        // println!("a: {:?}, b: {:?}, div: {:?}, rem: {:?}", a, b, div, rem);
 
         out_buffer.set_biguint_target(&self.div, &div);
         out_buffer.set_biguint_target(&self.rem, &rem);

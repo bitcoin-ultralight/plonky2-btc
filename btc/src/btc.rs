@@ -161,26 +161,19 @@ pub fn make_header_circuit<F: RichField + Extendable<D>, const D: usize>(
     println!("Done comparing sha hash to threshold");
 
     // Now we compute the work given the threshold bits
-    let mut numerator_bits = Vec::new(); // 2^256
+    let mut numerator_bits = Vec::new(); // 2^256-1
     let mut threshold_bits_copy = Vec::new();
     for i in 0..256 {
-        if i == 0 {
-            numerator_bits.push(builder.constant_bool(true));
-        } else {
-            numerator_bits.push(builder.constant_bool(true));
-        }
+        numerator_bits.push(builder.constant_bool(true));
         threshold_bits_copy.push(builder.add_virtual_bool_target_safe()); // Will verify that input is 0 or 1
         builder.connect(
             threshold_bits_input[i].target,
             threshold_bits_copy[i].target,
         );
     }
-    println!("numerator bits length {}", numerator_bits.len());
-    println!("threshold bits length {}", threshold_bits_copy.len());
     let numerator_as_biguint = bits_to_biguint_target(builder, numerator_bits);
     let denominator = bits_to_biguint_target(builder, threshold_bits_copy);
     let work = builder.div_biguint(&numerator_as_biguint, &denominator);
-    println!("In header circuit, the limbs is {}", work.num_limbs());
 
     return HeaderTarget {
         header_bits: header_bits,
@@ -233,19 +226,12 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
             );
         }
 
-        println!("header number {}", h);
-        println!(
-            "header_targets.work.num_limbs = {}",
-            header_targets.work.num_limbs()
-        );
-
         // Then add the header's work to the total work
         if h == 0 {
             work.push(header_targets.work);
         } else {
             work.push(builder.add_biguint(&work[h - 1], &header_targets.work));
         }
-        println!("work sum num_limbs {}", work[h].num_limbs());
 
         hashes.push(header_targets.hash);
 
@@ -274,12 +260,10 @@ pub fn make_multi_header_circuit<F: RichField + Extendable<D>, const D: usize>(
 mod tests {
     use std::ops::AddAssign;
     use std::ops::MulAssign;
-    use std::ops::SubAssign;
 
     use anyhow::Result;
     use hex::decode;
     use num::BigUint;
-    use num::Integer;
     use plonky2::hash::hash_types::RichField;
     use plonky2::iop::witness::{PartialWitness, Witness};
     use plonky2::plonk::circuit_builder::CircuitBuilder;
@@ -351,25 +335,6 @@ mod tests {
         return correct_work;
     }
 
-    fn get_work_target<F: RichField + Extendable<D>, const D: usize>(
-        builder: &mut CircuitBuilder<F, D>,
-        work: BigUint,
-    ) -> BigUintTarget {
-        let mut correct_work_bits = Vec::new();
-        for i in 0..256 {
-            let bit = work.bit(256 - i);
-            if bit {
-                let _true = builder._true();
-                correct_work_bits.push(_true);
-            } else {
-                let _false = builder._false();
-                correct_work_bits.push(_false);
-            }
-        }
-        let correct_work_target = bits_to_biguint_target(builder, correct_work_bits);
-        return correct_work_target;
-    }
-
     #[test]
     fn test_header_circuit() -> Result<()> {
         let genesis_header = decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap();
@@ -418,10 +383,6 @@ mod tests {
         println!("");
 
         let mut correct_work_target = builder.constant_biguint(&correct_work);
-        println!(
-            "correct work number limbs: {}",
-            correct_work_target.num_limbs()
-        );
         for _ in 8 - correct_work_target.num_limbs()..8 {
             correct_work_target.limbs.push(builder.zero_u32());
         }
@@ -500,7 +461,6 @@ mod tests {
 
             let (exp, mantissa) = compute_exp_and_mantissa(header_bits);
             let header_work = compute_work(exp, mantissa);
-            println!("header {} work {}", h, header_work);
             total_work.add_assign(header_work);
 
             for i in 0..256 {
